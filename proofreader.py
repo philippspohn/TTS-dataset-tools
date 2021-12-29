@@ -1,23 +1,15 @@
 import datetime
-from pathlib import Path
+
 import numpy
 import simpleaudio as sa
-import io
-import math
-from pydub import AudioSegment
-from pydub.utils import mediainfo
-from pydub.playback import play
 from dearpygui.core import *
-from dearpygui.simple import *
-import os
-import ntpath
-import csv
-import argparse
-import numpy as np
-import re
-import shutil
-import simpleaudio as sa
-import math
+from pydub import AudioSegment
+import time
+
+
+def current_milli_time():
+    return round(time.time() * 1000)
+
 
 class Proofreader:
     def __init__(self):
@@ -41,6 +33,33 @@ class Proofreader:
         self.selection_range_current = [None, None]
         self.selection_range_next = [None, None]
 
+        self.started_playing = 0
+        self.playing_current = True
+        self.total_length = 0
+        self.play_in = 0
+        self.play_out = 0
+
+    def is_playing(self):
+        return self.started_playing + self.get_play_duration() > current_milli_time()
+
+    def is_current_playing(self):
+        return self.playing_current
+
+    def get_playing_time(self):
+        return current_milli_time() - self.started_playing
+
+    def get_playing_total_time(self):
+        return self.total_length
+
+    def get_play_in(self):
+        return self.play_in
+
+    def get_play_out(self):
+        return self.play_out
+
+    def get_play_duration(self):
+        return self.play_out - self.play_in
+
     def set_filename(self, fname):
         self.fname = fname
 
@@ -55,7 +74,7 @@ class Proofreader:
 
     def autosave(self):
         if self.get_current() == None:
-            return 
+            return
 
         newline = ""
         with open("{}/{}".format(self.get_project_path(), "autosave.csv"), 'w') as csv_file:
@@ -63,16 +82,16 @@ class Proofreader:
             for row in table:
                 csv_file.write("{}{}|{}".format(newline, row[0], row[1]))
                 newline = "\n"
-        set_value("proofread_status", "{}/{} saved".format(self.get_project_path(), "autosave.csv"))            
-        #logging
+        set_value("proofread_status", "{}/{} saved".format(self.get_project_path(), "autosave.csv"))
+
         with open("{}/logfile.txt".format(self.get_project_path()), 'a') as log_file:
             t = datetime.datetime.now()
             tt = t.strftime("%c")
             row = self.get_selected_row()
             last_wav = get_table_item("table_proofread", row, 0)
-            log_file.write("\n{}: Saved {} Last item selected: {}".format(tt, "autosave.csv", last_wav))            
+            log_file.write("\n{}: Saved {} Last item selected: {}".format(tt, "autosave.csv", last_wav))
 
-        # save_csv_proofread_call("", "autosave")
+            # save_csv_proofread_call("", "autosave")
         print("autosaving to {}".format(self.get_project_path() + "/autosave.csv"))
 
     def scroll_up(self):
@@ -82,57 +101,46 @@ class Proofreader:
         if row == 0:
             return
         if self.get_current() == None:
-            return            
+            return
         row = row - 1
         self.set_selected_row(row)
         current_path = get_table_item("table_proofread", row, 0)
-        next_path = get_table_item("table_proofread", row+1, 0)
+        next_path = get_table_item("table_proofread", row + 1, 0)
 
         current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
         next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
-        #check to see if wav is empty?
 
         set_value("current_input_text", get_table_item("table_proofread", row, 1))
-        set_value("next_input_text", get_table_item("table_proofread", row+1, 1))
+        set_value("next_input_text", get_table_item("table_proofread", row + 1, 1))
         add_data("current_path", current_path)
         add_data("next_path", next_path)
 
-        # set_value("current_plot_label", current_path)
-
-
-        # set_value("wav_current_label", current_path)
-        # set_value("wav_next_label", next_path)
         self.set_current(current_wav)
         self.set_next(next_wav)
         self.plot_wavs()
 
-    def scroll_down(self):     
+    def scroll_down(self):
         if is_item_active("current_input_text") or is_item_active("next_input_text"):
-            return   
+            return
         row = self.get_selected_row()
         if self.get_num_items() <= (row + 2):
             return
         if self.get_current() == None:
             return
-            
-        row = row + 1    
+
+        row = row + 1
         self.set_selected_row(row)
         current_path = get_table_item("table_proofread", row, 0)
-        next_path = get_table_item("table_proofread", row+1, 0)
+        next_path = get_table_item("table_proofread", row + 1, 0)
 
         current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
         next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
 
         set_value("current_input_text", get_table_item("table_proofread", row, 1))
-        set_value("next_input_text", get_table_item("table_proofread", row+1, 1))
+        set_value("next_input_text", get_table_item("table_proofread", row + 1, 1))
         add_data("current_path", current_path)
         add_data("next_path", next_path)
 
-        # set_value("current_plot_label", current_path)
-
-
-        # set_value("wav_current_label", current_path)
-        # set_value("wav_next_label", next_path)
         self.set_current(current_wav)
         self.set_next(next_wav)
         self.plot_wavs()
@@ -143,14 +151,22 @@ class Proofreader:
     def get_num_items(self):
         return self.num_items
 
-    def play(self, data):
-        wav = data            
+    def play(self, data, playing_current, in_point=0, out_point=None):
+        wav = data
         sa.play_buffer(
             wav.raw_data,
             num_channels=wav.channels,
             bytes_per_sample=wav.sample_width,
             sample_rate=wav.frame_rate
         )
+        self.started_playing = current_milli_time()
+        self.playing_current = playing_current
+        self.play_in = in_point
+        self.play_out = in_point + len(wav) if out_point is None else out_point
+        if playing_current:
+            self.total_length = len(self.get_current())
+        else:
+            self.total_length = len(self.get_next())
 
     def stop(self):
         sa.stop_all()
@@ -179,9 +195,9 @@ class Proofreader:
     def get_next_point(self):
         return self.next_point
 
-    def set_current(self, wav):  
-        self.current = wav         
-    
+    def set_current(self, wav):
+        self.current = wav
+
     def set_next(self, wav):
         self.next = wav
 
@@ -198,18 +214,14 @@ class Proofreader:
         return self.project_path
 
     def plot_wavs(self):
-        audio1 = self.current.get_array_of_samples()   
+        audio1 = self.current.get_array_of_samples()
         current_int16 = numpy.frombuffer(audio1, dtype=numpy.int16)
         current_float32 = list(current_int16.astype(numpy.float32))
 
-        audio2 = self.next.get_array_of_samples()   
+        audio2 = self.next.get_array_of_samples()
         next_int16 = numpy.frombuffer(audio2, dtype=numpy.int16)
         next_float32 = list(next_int16.astype(numpy.float32))
 
-        # current_x_axis = []
-        # next_x_axis = []
-
-        current_polyline = []
         next_polyline = []
 
         clear_drawing("current_plot_drawing_new")
@@ -219,15 +231,12 @@ class Proofreader:
         y_max = max(current_float32)
         x_step_count = 0
         c = 0
-        
+
         for i in range(0, len(current_float32)):
-            # current_x_axis.append(i)
             if (i >= x_step_count):
                 # Draw vertical bars method
-                # y_axis_val = ((current_float32[i] + y_max) / (y_max*2)) * 200 
-                y_axis_val = (current_float32[i] / y_max) * 100 
-                draw_line("current_plot_drawing_new", [c,100], [c, y_axis_val+100], [222, 44, 255, 255], 2)
-                # current_polyline.append([ c, y_axis_val ])
+                y_axis_val = (current_float32[i] / y_max) * 100
+                draw_line("current_plot_drawing_new", [c, 100], [c, y_axis_val + 100], [222, 44, 255, 255], 2)
                 c += 1
                 x_step_count += x_step
 
@@ -236,45 +245,31 @@ class Proofreader:
         x_step_count = 0
         c = 0
         for i in range(0, len(next_float32)):
-            # next_x_axis.append(i)
             if (i >= x_step_count):
-                # y_axis_val = ((next_float32[i] + y_max) / (y_max*2)) * 200 
-                y_axis_val = (next_float32[i] / y_max) * 100 
-                draw_line("next_plot_drawing_new", [c,100], [c, y_axis_val+100], [222, 44, 255, 255], 2)
-                # next_polyline.append([ c, y_axis_val ])
+                y_axis_val = (next_float32[i] / y_max) * 100
+                draw_line("next_plot_drawing_new", [c, 100], [c, y_axis_val + 100], [222, 44, 255, 255], 2)
                 c += 1
-                x_step_count += x_step 
-
-        #print("current_plot length for sample rate is: {}".format(len(current_x_axis) / 44100))     
-        # add_line_series("current_plot", "", current_x_axis, current_float32, weight=2)
-        # add_line_series("next_plot", "", next_x_axis, next_float32, weight=2)
-
-        # clear_drawing("current_plot_drawing_new")
-        # Polyline method
-        # draw_polyline("current_plot_drawing_new", current_polyline, [255,255,0,255], thickness=3)
+                x_step_count += x_step
 
         draw_text("current_plot_drawing_new", [10, 175], get_data("current_path"), size=20)
-        draw_polyline("next_plot_drawing_new", next_polyline, [255,255,0,255], thickness=3)
+        draw_polyline("next_plot_drawing_new", next_polyline, [255, 255, 0, 255], thickness=3)
         draw_text("next_plot_drawing_new", [10, 175], get_data("next_path"), size=20)
-
-
-    # def current_plot_drawing_set_point(self, point):
-    #     self.current_point = point
-    #     draw_line("current_plot_drawing", [0,5], [1200, 5], [0,19,94, 255], 10)
-    #     if point:
-    #         draw_line("current_plot_drawing", [point-3,5], [point+3, 5], [255, 0, 0, 255], 10)
-    
-    # def next_plot_drawing_set_point(self, point):
-    #     self.next_point = point
-    #     draw_line("next_plot_drawing", [0,5], [1200, 5], [0,19,94, 255], 10)
-    #     if point:
-    #         draw_line("next_plot_drawing", [point-3,5], [point+3, 5], [255, 0, 0, 255], 10)
 
     def draw_selector(self, drawing_name, x_axis):
         delete_draw_command("current_plot_drawing_new", 'selector')
         delete_draw_command("next_plot_drawing_new", 'selector')
-        
-        draw_line(drawing_name, [x_axis, 0], [x_axis, 200], [0,0,255,255], 3, tag='selector')
+
+        draw_line(drawing_name, [x_axis, 0], [x_axis, 200], [0, 0, 255, 255], 3, tag='selector')
+
+    def clear_playerhead(self):
+        delete_draw_command("current_plot_drawing_new", 'playhead')
+        delete_draw_command("next_plot_drawing_new", 'playhead')
+
+    def draw_playhead(self, drawing_name, x_axis):
+        delete_draw_command("current_plot_drawing_new", 'playhead')
+        delete_draw_command("next_plot_drawing_new", 'playhead')
+
+        draw_line(drawing_name, [x_axis, 0], [x_axis, 200], [0xFF, 0x88, 0, 80], 3, tag='playhead')
 
     def draw_dragbox(self, drawing_name, x_axis):
         self.set_next_p(None)
@@ -286,20 +281,22 @@ class Proofreader:
         delete_draw_command("next_plot_drawing_new", 'dragbox')
         delete_draw_command("next_plot_drawing_new", 'p_selector')
         if drawing_name == "current_plot_drawing_new":
-            draw_rectangle(drawing_name, [self.drag_in_current, 0], [x_axis, 200], [125, 50, 50, 255], fill=[204, 229, 255, 80], rounding=0, thickness=2.0, tag='dragbox')
+            draw_rectangle(drawing_name, [self.drag_in_current, 0], [x_axis, 200], [125, 50, 50, 255],
+                           fill=[204, 229, 255, 80], rounding=0, thickness=2.0, tag='dragbox')
         elif drawing_name == "next_plot_drawing_new":
-            draw_rectangle(drawing_name, [self.drag_in_next, 0], [x_axis, 200], [125, 50, 50, 255], fill=[204, 229, 255, 80], rounding=0, thickness=2.0, tag='dragbox')
+            draw_rectangle(drawing_name, [self.drag_in_next, 0], [x_axis, 200], [125, 50, 50, 255],
+                           fill=[204, 229, 255, 80], rounding=0, thickness=2.0, tag='dragbox')
 
     def draw_p_selection(self, drawing_name, x_axis):
-        self.set_selection_range_current(None , None)
+        self.set_selection_range_current(None, None)
         self.set_selection_range_next(None, None)
         delete_draw_command("current_plot_drawing_new", 'selector')
         delete_draw_command("current_plot_drawing_new", 'dragbox')
         delete_draw_command("current_plot_drawing_new", 'p_selector')
         delete_draw_command("next_plot_drawing_new", 'selector')
         delete_draw_command("next_plot_drawing_new", 'dragbox')
-        delete_draw_command("next_plot_drawing_new", 'p_selector')        
-        draw_line(drawing_name, [x_axis, 0], [x_axis, 200], [255,0,0,255], 5, tag='p_selector')
+        delete_draw_command("next_plot_drawing_new", 'p_selector')
+        draw_line(drawing_name, [x_axis, 0], [x_axis, 200], [255, 0, 0, 255], 5, tag='p_selector')
 
     def play_selection(self):
         self.stop()
@@ -310,6 +307,10 @@ class Proofreader:
             w_current = self.get_current()
             num_samples = len(w_current.get_array_of_samples())
             drag_in, drag_out = self.get_selection_range_current()
+            if abs(drag_in - drag_out) < 5:
+                drag_out = num_samples
+            if abs(drag_in - drag_out) < 5:
+                return
             points = [drag_in, drag_out]
             in_point = min(points)
             out_point = max(points)
@@ -317,7 +318,8 @@ class Proofreader:
                 in_point = (in_point / 1200) * (num_samples / self.get_rate()) * 1000
                 out_point = (out_point / 1200) * (num_samples / self.get_rate()) * 1000
                 wav = w_current[in_point:out_point]
-                self.play(wav)  
+
+                self.play(wav, True, in_point)
 
         elif n[0] != None:
             w_next = self.get_next()
@@ -326,11 +328,15 @@ class Proofreader:
             points = [drag_in, drag_out]
             in_point = min(points)
             out_point = max(points)
+            if out_point - in_point < 5:
+                out_point = num_samples
+            if out_point - in_point < 5:
+                return
             if in_point != None and out_point != None:
                 in_point = (in_point / 1200) * (num_samples / self.get_rate()) * 1000
                 out_point = (out_point / 1200) * (num_samples / self.get_rate()) * 1000
                 wav = w_next[in_point:out_point]
-                self.play(wav)     
+                self.play(wav, False, in_point)
 
     def cut_selection(self):
         c = self.get_selection_range_current()
@@ -345,7 +351,6 @@ class Proofreader:
             out_point = max(points)
 
             if in_point != None and out_point != None:
-
                 in_point = (in_point / 1200) * (num_samples / self.get_rate()) * 1000
                 out_point = (out_point / 1200) * (num_samples / self.get_rate()) * 1000
 
@@ -375,10 +380,10 @@ class Proofreader:
 
                 self.set_next(w_next)
                 self.set_next_p(None)
-                self.set_selection_range_next(None, None)            
-                self.plot_wavs()    
+                self.set_selection_range_next(None, None)
+                self.plot_wavs()
 
-    def paste_selection(self):        
+    def paste_selection(self):
         c = self.get_current_p()
         n = self.get_next_p()
         if c:
@@ -394,9 +399,9 @@ class Proofreader:
             self.set_current(w_current)
             self.set_current_p(None)
             self.set_cut(None)
-            self.plot_wavs()       
+            self.plot_wavs()
 
-        elif n:    
+        elif n:
             cut = self.get_cut()
             if not cut:
                 return
@@ -409,55 +414,41 @@ class Proofreader:
             self.set_next(w_next)
             self.set_next_p(None)
             self.set_cut(None)
-            self.plot_wavs()            
+            self.plot_wavs()
 
-    def current_play(self):            
+    def current_play(self):
         self.stop()
         wav = self.get_current()
         if wav == None:
             return
-        self.play(wav)
-        # sa.play_buffer(
-        #     wav.raw_data,
-        #     num_channels=wav.channels,
-        #     bytes_per_sample=wav.sample_width,
-        #     sample_rate=wav.frame_rate
-        # )
+        self.play(wav, True)
 
-    def next_play(self):     
+    def next_play(self):
         self.stop()
         wav = self.get_next()
         if wav == None:
             return
-        self.play(wav)
-        # sa.play_buffer(
-        #     wav.raw_data,
-        #     num_channels=wav.channels,
-        #     bytes_per_sample=wav.sample_width,
-        #     sample_rate=wav.frame_rate
-        # )
+        self.play(wav, False)
 
-    def current_remove(self):          
+    def current_remove(self):
         if self.get_current() == None:
             return
         row = self.get_selected_row()
         current_path = get_table_item("table_proofread", row, 0)
-        #path = Path(current_path)
-        #shutil.copy("{}/{}".format(self.get_project_path(), current_path), "{}/wavs/removed_{}".format(self.get_project_path(), path.name))
         delete_row("table_proofread", row)
-        set_value("proofread_status", "Removed entry {}".format(current_path)) 
-        num_items =  self.get_num_items() - 1
-        self.set_num_items(num_items) 
-        
+        set_value("proofread_status", "Removed entry {}".format(current_path))
+        num_items = self.get_num_items() - 1
+        self.set_num_items(num_items)
+
         if num_items == row + 1:
-            #end of data   
+            # end of data
             current_path = get_table_item("table_proofread", row - 1, 0)
             next_path = get_table_item("table_proofread", row, 0)
             current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
             next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
             set_value("current_input_text", get_table_item("table_proofread", row - 1, 1))
             set_value("next_input_text", get_table_item("table_proofread", row, 1))
-            self.set_selected_row(row-1)
+            self.set_selected_row(row - 1)
         else:
             current_path = get_table_item("table_proofread", row, 0)
             next_path = get_table_item("table_proofread", row + 1, 0)
@@ -468,33 +459,29 @@ class Proofreader:
 
         add_data("current_path", current_path)
         add_data("next_path", next_path)
-        #set_value("wav_current_label", current_path)
-        #set_value("wav_next_label", next_path)
         self.set_current(current_wav)
         self.set_next(next_wav)
         self.plot_wavs()
 
-    def next_remove(self):        
+    def next_remove(self):
         if self.get_next() == None:
             return
         row = self.get_selected_row()
-        next_path = get_table_item("table_proofread", row+1, 0)
-        #path = Path(next_path)
-        #shutil.copy("{}/{}".format(self.get_project_path(), next_path), "{}/wavs/removed_{}".format(self.get_project_path(), path.name))
+        next_path = get_table_item("table_proofread", row + 1, 0)
         delete_row("table_proofread", row + 1)
-        set_value("proofread_status", "Removed entry {}".format(next_path)) 
-        num_items =  self.get_num_items() - 1
-        self.set_num_items(num_items) 
-        
+        set_value("proofread_status", "Removed entry {}".format(next_path))
+        num_items = self.get_num_items() - 1
+        self.set_num_items(num_items)
+
         if num_items == row + 1:
-            #end of data   
+            # end of data
             current_path = get_table_item("table_proofread", row - 1, 0)
             next_path = get_table_item("table_proofread", row, 0)
             current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
             next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
             set_value("current_input_text", get_table_item("table_proofread", row - 1, 1))
             set_value("next_input_text", get_table_item("table_proofread", row, 1))
-            self.set_selected_row(row-1)
+            self.set_selected_row(row - 1)
         else:
             current_path = get_table_item("table_proofread", row, 0)
             next_path = get_table_item("table_proofread", row + 1, 0)
@@ -505,75 +492,54 @@ class Proofreader:
 
         add_data("current_path", current_path)
         add_data("next_path", next_path)
-        #set_value("wav_current_label", current_path)
-        #set_value("wav_next_label", next_path)
         self.set_current(current_wav)
         self.set_next(next_wav)
         self.plot_wavs()
 
-    def table_row_selected(self):              
+    def table_row_selected(self):
         index = get_table_selections("table_proofread")
         row = index[0][0]
-        col = index[0][1]        
-        set_table_selection("table_proofread", row, col, False) 
-        
+        col = index[0][1]
+        set_table_selection("table_proofread", row, col, False)
+
         if self.get_num_items() == row + 1:
-            #clicked end of data
-            current_path = get_table_item("table_proofread", row-1, 0)
+            # clicked end of data
+            current_path = get_table_item("table_proofread", row - 1, 0)
             next_path = get_table_item("table_proofread", row, 0)
             current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
             next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
-            set_value("current_input_text", get_table_item("table_proofread", row-1, 1))
+            set_value("current_input_text", get_table_item("table_proofread", row - 1, 1))
             set_value("next_input_text", get_table_item("table_proofread", row, 1))
             self.set_selected_row(row - 1)
-            
+
         else:
             current_path = get_table_item("table_proofread", row, 0)
-            next_path = get_table_item("table_proofread", row+1, 0)
+            next_path = get_table_item("table_proofread", row + 1, 0)
             current_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), current_path))
             next_wav = AudioSegment.from_wav("{}/{}".format(self.get_project_path(), next_path))
             set_value("current_input_text", get_table_item("table_proofread", row, 1))
-            set_value("next_input_text", get_table_item("table_proofread", row+1, 1))
+            set_value("next_input_text", get_table_item("table_proofread", row + 1, 1))
             self.set_selected_row(row)
-            
+
         add_data("current_path", current_path)
         add_data("next_path", next_path)
-        #set_value("wav_current_label", current_path)
-        #set_value("wav_next_label", next_path)
         self.set_current(current_wav)
         self.set_next(next_wav)
-        #set_item_style_var("current_plot", mvGuiStyleVar_Name, "")
         self.plot_wavs()
 
-    def save_csv_proofread(self):        
+    def save_csv_proofread(self):
         if self.get_current() == None:
-            return 
+            return
         name = self.get_filename()
-        #name = get_value("proofread_project_name")
         if name:
             newline = ""
-            # if data == "autosave":
-            #     with open("{}/{}".format(self.get_project_path(), "autosave.csv"), 'w') as csv_file:
-            #         table = get_table_data("table_proofread")
-            #         for row in table:
-            #             csv_file.write("{}{}|{}".format(newline, row[0], row[1]))
-            #             newline = "\n"
-            #     set_value("proofread_status", "{}/{} saved".format(self.get_project_path(), "autosave.csv"))            
-            #     #logging
-            #     with open("{}/logfile.txt".format(self.get_project_path()), 'a') as log_file:
-            #         t = datetime.datetime.now()
-            #         tt = t.strftime("%c")
-            #         row = self.get_selected_row()
-            #         last_wav = get_table_item("table_proofread", row, 0)
-            #         log_file.write("\n{}: Saved {} Last item selected: {}".format(tt, "autosave.csv", last_wav))            
-
             with open("{}/{}".format(self.get_project_path(), name), 'w') as csv_file:
                 table = get_table_data("table_proofread")
                 for row in table:
                     csv_file.write("{}{}|{}".format(newline, row[0], row[1]))
                     newline = "\n"
             set_value("proofread_status", "{}/{} saved".format(self.get_project_path(), name))
-            #logging
+            # logging
             with open("{}/logfile.txt".format(self.get_project_path()), 'a') as log_file:
                 t = datetime.datetime.now()
                 tt = t.strftime("%c")
@@ -584,7 +550,6 @@ class Proofreader:
     def silence_selection(self):
         c = self.get_selection_range_current()
         n = self.get_selection_range_next()
-        # print(f"cut selection {c}  {n}")
         if c[0] != None:
             w_current = self.get_current()
             num_samples = len(w_current.get_array_of_samples())
@@ -598,7 +563,8 @@ class Proofreader:
                 out_point = (out_point / 1200) * (num_samples / self.get_rate()) * 1000
 
                 wav_silent_region = w_current[in_point:out_point]
-                w_current = w_current[:in_point] + AudioSegment.silent(duration=(wav_silent_region.duration_seconds*1000)) + w_current[out_point:]
+                w_current = w_current[:in_point] + AudioSegment.silent(
+                    duration=(wav_silent_region.duration_seconds * 1000)) + w_current[out_point:]
 
                 self.set_current(w_current)
                 self.set_current_p(None)
@@ -617,13 +583,13 @@ class Proofreader:
                 out_point = (out_point / 1200) * (num_samples / self.get_rate()) * 1000
 
                 wav_silent_region = w_next[in_point:out_point]
-                w_next = w_next[:in_point] + AudioSegment.silent(duration=(wav_silent_region.duration_seconds*1000)) + w_next[out_point:]
+                w_next = w_next[:in_point] + AudioSegment.silent(
+                    duration=(wav_silent_region.duration_seconds * 1000)) + w_next[out_point:]
 
                 self.set_next(w_next)
                 self.set_next_p(None)
-                self.set_selection_range_next(None, None)            
-                self.plot_wavs()    
-
+                self.set_selection_range_next(None, None)
+                self.plot_wavs()
 
     def set_drag_in_current(self, x_axis):
         self.drag_in_current = x_axis
@@ -647,7 +613,7 @@ class Proofreader:
         self.drag_out_next = x_axis
 
     def get_drag_out_next(self):
-        return self.drag_out_next        
+        return self.drag_out_next
 
     def set_selection_range_current(self, x, y):
         self.selection_range_current[0] = x
@@ -665,9 +631,9 @@ class Proofreader:
 
     def set_cut(self, cut):
         self.cut = cut
-    
+
     def get_cut(self):
-        return self.cut 
+        return self.cut
 
     def set_current_p(self, p):
         self.current_p = p

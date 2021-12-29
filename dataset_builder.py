@@ -1,24 +1,14 @@
-import datetime
-from pathlib import Path
-import numpy
-import io
 import math
-from pydub import AudioSegment, silence, effects
+from pydub import AudioSegment, silence
 from pydub.utils import mediainfo
-from pydub.playback import play
 from dearpygui.core import *
-from dearpygui.simple import *
 import os
-import ntpath
 import csv
-import argparse
-import numpy as np
 import re
 import shutil
 from google.cloud import storage
-#from google.cloud import speech as speech
 from google.cloud import speech_v1p1beta1 as speech
-import simpleaudio as sa
+import config_helper
 
 def to_millis(timestamp):
     timestamp = str(timestamp)
@@ -106,29 +96,8 @@ class Dataset_builder:
                 c_splits = split_wav(c, 1000)
                 for s in c_splits:
                     cuts.append(s)
-
-            # c_split_len = 1
-            # s_len_temp = s_len - 100
-
-            # for c in silence_cuts:
-            #     if (c.duration_seconds * 1000) > (self.cut_length * 1000):
-            #         # cut again, too long 
-            #         #print("cutting again...")
-            #         while c_split_len == 1:      
-            #             #print(s_len_temp)  
-            #             c_split = split_wav(c, s_len_temp)
-            #             c_split_len = len(c_split)
-            #             s_len_temp -= 100   #reduce split time for hopefully more cuts
-            #         c_split_len = 1
-            #         s_len_temp = s_len - 100
-            #         for i in c_split:
-            #             cuts.append(i)                       
-            #     else:
-            #         cuts.append(c)
-
             # rebuild small cuts into larger, but below split len        
             temp_cuts = AudioSegment.empty()
-            prev_cuts = AudioSegment.empty()
 
             for i, c in enumerate(cuts):
                 prev_cuts = temp_cuts             
@@ -175,7 +144,7 @@ class Dataset_builder:
                         config = speech.RecognitionConfig(
                             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                             sample_rate_hertz=int(sample_rate),
-                            language_code="en-US",
+                            language_code=config_helper.cfg_get("general", "language"),
                             enable_automatic_punctuation=True,
                             enable_word_time_offsets=False, 
                             enable_speaker_diarization=False,
@@ -187,7 +156,7 @@ class Dataset_builder:
                         config = speech.RecognitionConfig(
                             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                             sample_rate_hertz=int(sample_rate),
-                            language_code="en-US",
+                            language_code=config_helper.cfg_get("general", "language"),
                             enable_automatic_punctuation=True,
                             enable_word_time_offsets=False, 
                             enable_speaker_diarization=False,
@@ -401,7 +370,7 @@ class Dataset_builder:
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=int(sample_rate),
-            language_code="en-US",
+            language_code=config_helper.cfg_get("general", "language"),
             enable_automatic_punctuation=True,
             enable_word_time_offsets=True, 
             enable_speaker_diarization=True,

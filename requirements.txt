@@ -1,0 +1,6 @@
+numpy~=1.21.5
+simpleaudio~=1.0.4
+sox~=1.4.1
+pydub~=0.25.1
+dearpygui~=0.6.415
+dearpygui~=0.6.415
