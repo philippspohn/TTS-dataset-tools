@@ -1,9 +1,8 @@
-from pathlib import Path
+import os.path
 from shutil import copyfile
 from threading import Timer
 import webbrowser
 
-from dearpygui.core import *
 from dearpygui.simple import *
 
 import sox
@@ -20,6 +19,10 @@ def save_current_settings():
     cfg_set("general", "use_google_api", str(get_value("input_split")))
     cfg_set("general", "use_enhanced_video_model", str(get_value("input_use_videomodel")))
     cfg_set("general", "language_code", get_value("input_language_code"))
+    cfg_set("general", "google_cloud_credentials_file",  get_value("label_credentials_file_path"))
+    cfg_set("general", "diarization_project_directory",  get_value("diarization_project_directory"))
+    cfg_set("general", "datasetbuilder_project_directory",  get_value("datasetbuilder_project_directory"))
+    cfg_set("general", "save_proofreader_on_exit",  str(get_value("save_proofreader_on_exit")))
 
 
 class RepeatedTimer(object):
@@ -59,21 +62,31 @@ def add_wav_file_transcribe(sender, data):
     set_value("label_wav_file_transcribe", "{}/{}".format(data[0], data[1]))
 
 
+def open_credentials_file_call(sender, data):
+    open_file_dialog(add_credentials_file)
+
+
+def add_credentials_file(sender, data):
+    # open working wav for transcribing
+    set_value("label_credentials_file_path", "{}/{}".format(data[0], data[1]))
+
 def run_google_speech_call(sender, data):
     # run transcription
     if get_value("label_wav_file_transcribe") == "":
         return
     builder.diarization(get_value("label_wav_file_transcribe"), get_value("input_storage_bucket"),
-                        get_value("input_project_name"))
+                        get_value("diarization_project_directory"), get_value("label_credentials_file_path"))
 
 
 # Functions / callbacks for Dataset Builder
 def run_dataset_builder_call(sender, data):
     # check to see if txt and wav file was selected
     set_value("label_build_status", "Running builder...")
-    builder.set_values(get_value("input_project_name"), get_value("label_speaker_text_path")
+
+    builder.set_values(get_value("datasetbuilder_project_directory"), get_value("label_speaker_text_path")
                        , get_value("label_wav_file_path"), get_value("input_starting_index"),
-                       get_value("input_cut_length"), get_value("input_split"), get_value("input_contains_punc"))
+                       get_value("input_cut_length"), get_value("input_split"), get_value("input_contains_punc"), get_value("label_credentials_file_path"),
+                       get_value("input_project_name"))
     builder.build_dataset()
 
 
@@ -84,7 +97,12 @@ def add_speaker_txt_file(sender, data):
 
 def add_speaker_wav_file(sender, data):
     # open working speaker text
-    set_value("label_wav_file_path", "{}/{}".format(data[0], data[1]))
+    wav_file_path = "{}/{}".format(data[0], data[1])
+    set_value("label_wav_file_path", wav_file_path)
+    duration = AudioSegment.from_wav(wav_file_path).duration_seconds
+    duration_min = math.floor(duration/60)
+    duration_sec = round(duration - duration_min * 60)
+    set_value("label_wav_duration", f'{str(duration_min).zfill(2)}m {str(duration_sec).zfill(2)}s -')
 
 
 def open_speaker_txt_file_call(sender, data):
@@ -96,7 +114,7 @@ def open_wav_file_call(sender, data):
 
 
 # Functions / callbacks for Proofreader
-def save_csv_proofread_call(sender, data):
+def save_csv_proofread_call():
     proofreader.save_csv_proofread()
 
 
@@ -154,9 +172,6 @@ def add_csv_path_proofread(path):
     add_data("current_path", current_path)
     add_data("next_path", next_path)
 
-    # set_value("current_plot_label", current_path)
-    # set_value("wav_current_label", current_path)
-    # set_value("wav_next_label", next_path)
     proofreader.set_project_path(os.path.dirname(path))
     proofreader.set_current(current_wav)
     proofreader.set_next(next_wav)
@@ -164,55 +179,6 @@ def add_csv_path_proofread(path):
 
     # set autosave timer on
     rt.start()
-
-
-# def current_delete_beginningcut_call(sender, data):
-#     w_current = proofreader.get_current()
-#     if proofreader.get_current() == None:
-#         return 
-#     num_samples = len(w_current.get_array_of_samples())
-#     point = proofreader.get_current_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_current = w_current[point:]
-#         proofreader.set_current(w_current)
-#         proofreader.plot_wavs()
-
-# def current_delete_endcut_call(sender, data):    
-#     w_current = proofreader.get_current()
-#     if proofreader.get_current() == None:
-#         return 
-#     num_samples = len(w_current.get_array_of_samples())
-#     point = proofreader.get_current_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_current = w_current[:point]
-#         proofreader.set_current(w_current)
-#         proofreader.plot_wavs()
-
-# def next_delete_beginningcut_call(sender, data):
-#     w_next = proofreader.get_next()
-#     if proofreader.get_next() == None:
-#         return 
-#     num_samples = len(w_next.get_array_of_samples())
-#     point = proofreader.get_next_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_next = w_next[point:]
-#         proofreader.set_next(w_next)
-#         proofreader.plot_wavs()
-
-# def next_delete_endcut_call(sender, data):
-#     w_next = proofreader.get_next()
-#     if proofreader.get_next() == None:
-#         return 
-#     num_samples = len(w_next.get_array_of_samples())
-#     point = proofreader.get_next_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_next = w_next[:point]
-#         proofreader.set_next(w_next)
-#         proofreader.plot_wavs()
 
 def save_current_text_call(sender, data):
     if proofreader.get_current() == None:
@@ -230,24 +196,12 @@ def save_next_text_call(sender, data):
     set_table_item("table_proofread", row + 1, 1, text)
 
 
-def current_save_call(sender, data):
-    w = proofreader.get_current()
-    if w == None:
-        return
-    row = proofreader.get_selected_row()
-    path = Path(get_table_item("table_proofread", row, 0))
-    w.export("{}/wavs/{}".format(proofreader.get_project_path(), path.name), format="wav")
-    set_value("proofread_status", "{} saved".format(path.name))
+def current_save_call():
+    proofreader.save_current()
 
 
-def next_save_call(sender, data):
-    w = proofreader.get_next()
-    if w == None:
-        return
-    row = proofreader.get_selected_row()
-    path = Path(get_table_item("table_proofread", row + 1, 0))
-    w.export("{}/wavs/{}".format(proofreader.get_project_path(), path.name), format="wav")
-    set_value("proofread_status", "{} saved".format(path.name))
+def next_save_call():
+    proofreader.save_next()
 
 
 def save_all_call(sender, data):
@@ -268,120 +222,6 @@ def cut_selection_call(sender, data):
 def paste_selection_call(sender, data):
     proofreader.paste_selection()
 
-
-# def current_play_from_selection_call(sender, data):
-#     proofreader.stop()
-#     w_current = proofreader.get_current()
-#     if w_current == None:
-#         return
-#     num_samples = len(w_current.get_array_of_samples())
-#     point = proofreader.get_current_point()
-
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000
-#         wav = w_current[point:]
-#         proofreader.play(wav)        
-#         # #play(w_cut)
-#         # sa.play_buffer(
-#         #     wav.raw_data,
-#         #     num_channels=wav.channels,
-#         #     bytes_per_sample=wav.sample_width,
-#         #     sample_rate=wav.frame_rate
-#         # )
-
-# def current_play_to_selection_call(sender, data):
-#     proofreader.stop()
-#     w_current = proofreader.get_current()
-#     if w_current == None:
-#         return
-#     num_samples = len(w_current.get_array_of_samples())
-#     point = proofreader.get_current_point()
-
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000
-#         wav = w_current[:point]
-#         proofreader.play(wav)        
-#         # #play(w_cut)
-#         # sa.play_buffer(
-#         #     wav.raw_data,
-#         #     num_channels=wav.channels,
-#         #     bytes_per_sample=wav.sample_width,
-#         #     sample_rate=wav.frame_rate
-#         # )
-
-# def next_play_to_selection_call(sender, data):
-#     proofreader.stop()
-#     w_next = proofreader.get_next()
-#     if w_next == None:
-#         return
-#     num_samples = len(w_next.get_array_of_samples())
-#     point = proofreader.get_next_point()
-
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000
-#         wav = w_next[:point]
-#         proofreader.play(wav)
-#         # #play(w_cut)
-#         # sa.play_buffer(
-#         #     wav.raw_data,
-#         #     num_channels=wav.channels,
-#         #     bytes_per_sample=wav.sample_width,
-#         #     sample_rate=wav.frame_rate
-#         # )
-
-# def next_play_from_selection_call(sender, data):
-#     proofreader.stop()
-#     w_next = proofreader.get_next()
-#     if w_next == None:
-#         return
-#     num_samples = len(w_next.get_array_of_samples())
-#     point = proofreader.get_next_point()
-
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000
-#         wav = w_next[point:]
-#         proofreader.play(wav)        
-#         # #play(w_cut)
-#         # sa.play_buffer(
-#         #     wav.raw_data,
-#         #     num_channels=wav.channels,
-#         #     bytes_per_sample=wav.sample_width,
-#         #     sample_rate=wav.frame_rate
-#         # )
-
-# def current_send_call(sender, data):
-#     w_current = proofreader.get_current()
-#     w_next = proofreader.get_next()
-#     if proofreader.get_current() == None:
-#         return 
-
-#     num_samples = len(w_current.get_array_of_samples())
-#     point = proofreader.get_current_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_cut = w_current[point:]
-#         w_current = w_current[:point]
-#         w_next = w_cut + w_next
-#         proofreader.set_current(w_current)
-#         proofreader.set_next(w_next)
-#         proofreader.plot_wavs()
-
-# def next_send_call(sender, data):
-#     w_current = proofreader.get_current()
-#     w_next = proofreader.get_next()
-#     if proofreader.get_next() == None:
-#         return 
-
-#     num_samples = len(w_next.get_array_of_samples())
-#     point = proofreader.get_next_point()
-#     if point:
-#         point = (point / 1200) * (num_samples / proofreader.get_rate()) * 1000        
-#         w_cut = w_next[:point]
-#         w_next = w_next[point:]
-#         w_current = w_current + w_cut
-#         proofreader.set_current(w_current)
-#         proofreader.set_next(w_next)
-#         proofreader.plot_wavs()         
 
 def current_play_call(sender, data):
     proofreader.current_play()
@@ -406,6 +246,128 @@ def stop_playing_call(sender, data):
 def table_row_selected_call(sender, data):
     proofreader.table_row_selected()
 
+def reset_current_call():
+    w = proofreader.get_current()
+    if w == None:
+        return
+    row = proofreader.get_selected_row()
+    path = Path(get_table_item("table_proofread", row, 0))
+    proofreader.set_current(AudioSegment.from_wav(os.path.join(proofreader.get_project_path(), "wavs", path.name)))
+    proofreader.set_current_p(None)
+    proofreader.set_selection_range_current(None, None)
+    proofreader.plot_wavs()
+
+def reset_next_call():
+    w = proofreader.get_next()
+    if w == None:
+        return
+    row = proofreader.get_selected_row() + 1
+    path = Path(get_table_item("table_proofread", row, 0))
+    proofreader.set_next(AudioSegment.from_wav(os.path.join(proofreader.get_project_path(), "wavs", path.name)))
+    proofreader.plot_wavs()
+
+def duplicate_selection():
+    c = proofreader.get_selection_range_current()
+    n = proofreader.get_selection_range_next()
+    if c[0]:
+        duplicate_current_call()
+    elif n[0]:
+        duplicate_next_call()
+
+def duplicate_current_call():
+    w = proofreader.get_current()
+    if w == None:
+        return
+
+    w_current = proofreader.get_current()
+    num_samples = len(w_current.get_array_of_samples())
+    drag_in, drag_out = proofreader.get_selection_range_current()
+    points = [drag_in, drag_out]
+    in_point = min(points)
+    out_point = max(points)
+
+    if in_point is None or out_point is None:
+        return
+
+    in_point = (in_point / 1200) * (num_samples / proofreader.get_rate()) * 1000
+    out_point = (out_point / 1200) * (num_samples / proofreader.get_rate()) * 1000
+    w_new = w_current[in_point:out_point]
+
+    # Add to table
+    row = proofreader.get_selected_row()
+    old_path = Path(get_table_item("table_proofread", row, 0))
+    text = get_table_item("table_proofread", row, 1)
+    new_path = os.path.join(proofreader.get_project_path(), old_path)
+    new_path = os.path.dirname(new_path)
+    name = str(current_milli_time())
+    new_path = os.path.join(new_path, name + ".wav")
+    add_row("table_proofread", [os.path.join(os.path.dirname(old_path), name) + ".wav", text])
+
+    proofreader.set_num_items(proofreader.get_num_items() + 1)
+
+    # Update files
+    w_new.export(new_path, format="wav")
+    set_value("proofread_status", f"Created duplicate {name} and appened at the end. Saved csv.")
+
+    save_csv_proofread_call()
+
+
+def duplicate_next_call():
+    w = proofreader.get_next()
+    if w == None:
+        return
+
+    w_next = proofreader.get_next()
+    num_samples = len(w_next.get_array_of_samples())
+    drag_in, drag_out = proofreader.get_selection_range_next()
+    points = [drag_in, drag_out]
+    in_point = min(points)
+    out_point = max(points)
+
+    if in_point is None or out_point is None:
+        return
+
+    in_point = (in_point / 1200) * (num_samples / proofreader.get_rate()) * 1000
+    out_point = (out_point / 1200) * (num_samples / proofreader.get_rate()) * 1000
+    w_new = w_next[in_point:out_point]
+
+    # Add to table
+    row = proofreader.get_selected_row() + 1
+    old_path = Path(get_table_item("table_proofread", row, 0))
+    text = get_table_item("table_proofread", row, 1)
+    new_path = os.path.join(proofreader.get_project_path(), old_path)
+    new_path = os.path.dirname(new_path)
+    name = str(current_milli_time())
+    new_path = os.path.join(new_path, name + ".wav")
+    add_row("table_proofread", [os.path.join(os.path.dirname(old_path), name) + ".wav", text])
+
+    proofreader.set_num_items(proofreader.get_num_items() + 1)
+
+    # Update files
+    w_new.export(new_path, format="wav")
+    set_value("proofread_status", f"Created duplicate {name} and appened at the end. Saved csv.")
+
+    save_csv_proofread_call()
+
+def on_current_input_text_change():
+    if proofreader.get_num_items() == 0:
+        return
+    row = proofreader.get_selected_row()
+    set_table_item("table_proofread", row, 1, get_value("current_input_text"))
+
+def on_next_input_text_change():
+    if proofreader.get_num_items() == 0 or proofreader.get_num_items() == 1:
+        return
+    row = proofreader.get_selected_row() + 1
+    set_table_item("table_proofread", row, 1, get_value("next_input_text"))
+
+def exit_callback():
+    if get_value("save_proofreader_on_exit"):
+        save_csv_proofread_call()
+        next_save_call()
+        current_save_call()
+
+set_exit_callback(exit_callback)
 
 # Mouse Callbacks
 
@@ -489,8 +451,22 @@ def tools_process_wavs_call(sender, data):
         print('\a')  # system beep
 
 
+def open_file_dialogue_and_set_label(label_name, save_to_config=False):
+    return lambda: open_file_dialog(lambda sender, data: set_label(label_name, os.path.join(data[0], data[1]), save_to_config))
+
+
+def open_directory_dialogue_and_set_label(label_name, save_to_config=False):
+    return lambda: select_directory_dialog(lambda sender, data: set_label(label_name, os.path.join(data[0], data[1]), save_to_config))
+
+
+def set_label(label_name, value, save_to_config):
+    set_value(label_name, value)
+    if save_to_config:
+        cfg_set("general", label_name, value)
+
+
 def tools_open_project_merge_call(sender, data):
-    select_directory_dialog(add_tools_project_merge_call)
+    open_file_dialog(add_tools_project_merge_call)
 
 
 def tools_clear_merge_projects_call(sender, data):
@@ -499,7 +475,7 @@ def tools_clear_merge_projects_call(sender, data):
 
 def add_tools_project_merge_call(sender, data):
     # add project to table list
-    project_path = data[0] + '\\' + data[1]
+    project_path = os.path.join(data[0], data[1])
     add_row("tools_table_merge", [project_path])
 
 
@@ -508,30 +484,42 @@ def tools_merge_projects_call(sender, data):
     if not table:
         print("Table is empty")
         return
-    if not os.path.exists("merged"):
-        os.mkdir("merged")
-    if not os.path.exists("merged\\wavs"):
-        os.mkdir("merged\\wavs")
-    else:
-        shutil.rmtree("merged\\wavs")
-        os.mkdir("merged\\wavs")
 
-    with open("merged\\output.csv", 'w') as f:
+
+    target_dir = get_value("label_tool_open_marge_target_dir")
+    if not target_dir:
+        target_dir = "merged"
+
+    output_wavs_dir = os.path.join(target_dir, "wavs")
+    output_csv = os.path.join(target_dir, "output.csv")
+
+    if not os.path.exists(target_dir):
+        os.mkdir(target_dir)
+    if not os.path.exists(output_wavs_dir):
+        os.mkdir(output_wavs_dir)
+    else:
+        shutil.rmtree(output_wavs_dir)
+        os.mkdir(output_wavs_dir)
+
+    with open(output_csv, 'w') as f:
         newline = ''
-        new_wav_path = ''
         count = 0
         for row in table:
-            with open(row[0] + '\\output.csv') as p:
+            input_csv_file = row[0]
+            input_csv_dir = os.path.dirname(input_csv_file)
+            with open(input_csv_file) as p:
                 lines = p.readlines()
                 for line in lines:
                     wav_path, text = line.split('|')
                     text = text.strip()
-                    f.write(newline + 'wavs\\' + str(count) + '.wav' + '|' + text)
+                    f.write(newline + 'wavs/' + str(count).zfill(4) + '.wav' + '|' + text)
                     newline = '\n'
-                    copyfile(row[0] + '\\' + wav_path, "merged\\wavs\\" + str(count) + '.wav')
+                    input_wav_file = os.path.join(input_csv_dir, wav_path)
+                    output_wav_file = os.path.join(output_wavs_dir, str(count).zfill(4) + '.wav')
+                    copyfile(input_wav_file, output_wav_file)
                     count += 1
         print("Done merging!")
-        set_value("tools_status", "Done merging projects. Output at /merged")
+        set_value("tools_status", "Done merging projects. Output at " + target_dir)
         print('\a')  # system beep
 
 
@@ -647,36 +635,17 @@ def apply_font_scale_call(sender, data):
 
 
 def render_call(sender, data):
+
+    if is_key_pressed(mvKey_K) and is_key_down(mvKey_LControl):
+        proofreader.cut_selection()
+
+    if is_key_pressed(mvKey_R) and is_key_down(mvKey_LControl):
+        proofreader.cut_outside_selction()
+
+    if is_key_pressed(mvKey_D) and is_key_down(mvKey_LWin):
+        duplicate_selection()
+
     # mouse
-    # if is_mouse_button_dragging(0, .01):
-
-        # mouse_pos = get_drawing_mouse_pos()
-        # if is_item_hovered("current_plot_drawing_new"):
-        #     print("aa")
-        #     if proofreader.get_drag_in_current() == None:
-        #         proofreader.set_drag_in_current(mouse_pos[0])
-        #     dout = mouse_pos[0]
-        #     if dout < 10:
-        #         dout = 0
-        #     if dout > 1190:
-        #         dout = 1200
-        #     proofreader.set_drag_out_current(dout)
-        #     proofreader.draw_dragbox("current_plot_drawing_new", dout)
-        # elif is_item_hovered("next_plot_drawing_new"):
-        #     print("bb")
-        #     if proofreader.get_drag_in_next() == None:
-        #         proofreader.set_drag_in_next(mouse_pos[0])
-        #     dout = mouse_pos[0]
-        #     if dout < 10:
-        #         dout = 0
-        #     if dout > 1190:
-        #         dout = 1200
-        #     proofreader.set_drag_out_next(dout)
-        #     proofreader.draw_dragbox("next_plot_drawing_new", dout)
-
-
-
-
     if is_mouse_button_released(0):
         # if drag values set, copy and then clear
         mouse_pos = get_drawing_mouse_pos()
@@ -751,67 +720,54 @@ def handle_mouse_down():
 
 def handle_key_down():
     # keyboard handling for proofreader
-    if is_key_pressed(mvKey_Control) and is_key_pressed(mvKey_S):
-        save_csv_proofread_call("", "")
+    if not is_key_down(mvKey_LControl) and not is_key_down(mvKey_LWin):
+        if is_key_pressed(mvKey_F9):
+            play_selection_call("", "")
 
-    if is_key_pressed(mvKey_F9):
-        play_selection_call("", "")
+        if is_key_pressed(mvKey_F11):
+            cut_selection_call("", "")
 
-    if is_key_pressed(mvKey_F11):
-        cut_selection_call("", "")
+        if is_key_pressed(mvKey_F12):
+            paste_selection_call("", "")
 
-    if is_key_pressed(mvKey_F12):
-        paste_selection_call("", "")
+        if is_key_pressed(mvKey_Up) or is_key_pressed(mvKey_A):
+            # move to previous entries
+            proofreader.scroll_up()
 
-    if is_key_pressed(mvKey_Up) or is_key_pressed(mvKey_A):
-        # move to previous entries
-        proofreader.scroll_up()
+        if is_key_pressed(mvKey_Down) or is_key_pressed(mvKey_D):
+            # move to next entries
+            proofreader.scroll_down()
 
-    if is_key_pressed(mvKey_Down) or is_key_pressed(mvKey_D):
-        # move to next entries
-        proofreader.scroll_down()
-
-    # if is_key_pressed(mvKey_Open_Brace):
-    #     current_send_call("","") 
-
-    # if is_key_pressed(mvKey_Close_Brace):
-    #     next_send_call("","") 
-
-    if is_key_pressed(mvKey_Insert):
+    if is_key_pressed(mvKey_Insert) or (is_key_pressed(mvKey_S) and is_key_down(mvKey_LWin)):
         if proofreader.get_current() == None:
             return
         save_current_text_call("", "")
         save_next_text_call("", "")
-        current_save_call("", "")
-        next_save_call("", "")
+        current_save_call()
+        next_save_call()
+        proofreader.save_csv_proofread()
         set_value("proofread_status", "All saved")
 
     if is_key_pressed(mvKey_Prior):
         current_play_call("", "")
 
-        # if is_key_pressed(mvKey_F9):
-    #     current_play_to_selection_call("","") 
-
-    # if is_key_pressed(mvKey_F10):
-    #     current_play_from_selection_call("","") 
-
     if is_key_pressed(mvKey_Next):
         next_play_call("", "")
 
-        # if is_key_pressed(mvKey_F11):
-    #     next_play_to_selection_call("","") 
-
-    # if is_key_pressed(mvKey_F12):
-    #     next_play_from_selection_call("","") 
 
     if is_key_pressed(mvKey_Pause):
         proofreader.stop()
 
     if is_key_pressed(mvKey_Spacebar):
-        proofreader.play_selection()
+        if proofreader.is_playing():
+            proofreader.stop()
+        else:
+            proofreader.play_selection()
 
-    if is_key_pressed(mvKey_R) and  is_key_down(mvKey_LControl):
-        proofreader.cut_selection()
+    if is_key_pressed(mvKey_Control) and is_key_pressed(mvKey_S):
+        save_csv_proofread_call()
+
+
 
 
 
@@ -847,12 +803,18 @@ with window("mainWin"):
     with tab_bar("tb1"):
         with tab("tab0", label="Dataset Tools"):
             add_spacing(count=5)
-            add_text(
-                "For Google Speech to Text API you will need a Google Cloud Platform account.\nYour $GOOGLE_APPLICATION_CREDENTIALS must point to your credentials JSON file.")
-            add_spacing(count=2)
             add_text("Enter name of project: ")
             add_same_line(spacing=10)
             add_input_text("input_project_name", width=500, default_value=cfg_get("general", "project_name"), label="")
+            add_spacing(count=5)
+            add_text("Enter path to google cloud credentials json-file")
+            add_same_line(spacing=5)
+            add_button("open_credentials_file_path", callback=open_credentials_file_call, label="Open credentials file")
+            add_same_line(spacing=5)
+            add_button("open_credentials_file_path_info", label="[Learn more]",
+                       callback=lambda: webbrowser.open("https://cloud.google.com/docs/authentication/getting-started"))
+            add_same_line(spacing=10)
+            add_label_text("label_credentials_file_path", label="", default_value=cfg_get("general", "google_cloud_credentials_file"))
             add_spacing(count=5)
             add_text("Enter name of your clould storage bucket: ")
             add_same_line(spacing=10)
@@ -879,11 +841,19 @@ with window("mainWin"):
             add_input_text("input_diarization_num", width=40, default_value="1", label="")
             add_spacing(count=5)
             add_text("Select the wav file to transcribe (must be mono)")
+            add_spacing(count=5)
             add_button("open_wav_file_transcribe", callback=open_wav_file_transcribe_call, label="Open wav file")
+            add_same_line(spacing=10)
+            add_label_text("label_wav_file_transcribe", label="")
+            add_spacing(count=5)
+            add_button("button_diarization_project_directory", label="Open output dir",
+                       callback=open_directory_dialogue_and_set_label("diarization_project_directory", True))
+            add_same_line(spacing=10)
+            add_label_text("diarization_project_directory", default_value=cfg_get("general", "diarization_project_directory"), label="")
             add_spacing(count=5)
             add_button("run_google_speech", callback=run_google_speech_call, label="Run Google Diarization")
             add_same_line(spacing=10)
-            add_label_text("label_wav_file_transcribe", label="")
+            add_label_text("label_diarization_run_info", label="")
             add_spacing(count=2)
 
             # Transcription
@@ -926,7 +896,17 @@ with window("mainWin"):
             add_same_line(spacing=10)
             add_button("open_wav_file", callback=open_wav_file_call, label="Open wav file")
             add_same_line(spacing=10)
+            add_label_text("label_wav_duration", label="")
+            set_item_width("label_wav_duration", 80)
+            add_same_line(spacing=3)
             add_label_text("label_wav_file_path", label="")
+
+            add_button("button_datasetbuilder_open_project", label="Open project directory",
+                       callback=open_directory_dialogue_and_set_label("datasetbuilder_project_directory", True))
+            add_same_line(spacing=10)
+            add_label_text("datasetbuilder_project_directory", label="",
+                           default_value=cfg_get("general", "datasetbuilder_project_directory"))
+
             add_spacing(count=5)
             add_button("run_dataset_builder", callback=run_dataset_builder_call, label="Run dataset builder")
             add_label_text("label_build_status", label="")
@@ -955,15 +935,13 @@ with window("mainWin"):
             add_same_line(spacing=50)
             add_button("open_last_csv_proofread", callback=open_last_csv_proofread_call, label="Open last file")
             add_same_line(spacing=10)
-            add_label_text("open_last_csv_proofread_info")
+            add_label_text("proofread_status", default_value="", label="")
             # add_same_line(spacing=10)     
-            # add_input_text("proofread_project_name", width=250, default_value="", label="" ) 
-            add_same_line(spacing=10)
-            add_label_text("proofread_status", label="")
+            # add_input_text("proofread_project_name", width=250, default_value="", label="" )
             add_spacing(count=3)
             add_table("table_proofread", ["Wav path", "Text"], callback=table_row_selected_call, height=200)
             add_spacing(count=2)
-            add_input_text("current_input_text", width=1475, default_value="", label="")
+            add_input_text("current_input_text", width=1475, default_value="", label="",  callback=on_current_input_text_change)
             add_spacing(count=2)
             with group("group5"):
                 add_drawing("current_plot_drawing_new", width=1200, height=200)
@@ -982,7 +960,11 @@ with window("mainWin"):
                 # add_button("current_play_from_selection", callback=current_play_from_selection_call, label="Play from selection")  
                 add_button("play_selection_current", callback=play_selection_call, label="Play selection")
                 add_button("cut_selection_current", callback=cut_selection_call, label="Cut selection")
+                add_button("cut_selection_outside_current", callback=lambda: proofreader.cut_outside_selction(), label="Cut outside selection")
                 add_button("paste_selection_current", callback=paste_selection_call, label="Paste selection")
+                add_button("undo_current", callback=reset_current_call, label="Reset")
+                add_same_line(spacing=5)
+                add_button("duplicate_current", callback=duplicate_current_call, label="Duplicate Sel")
 
                 # add_button("current_send", callback=current_send_call, label="Send end cut to Next")  
                 # add_button("current_save", callback=current_save_call, label="Save wav")
@@ -993,7 +975,7 @@ with window("mainWin"):
                 add_button("current_remove", callback=current_remove_call, label="Remove entry!")
             # proofreader.current_plot_drawing_set_point(0)
             add_spacing(count=5)
-            add_input_text("next_input_text", width=1475, default_value="", label="")
+            add_input_text("next_input_text", width=1475, default_value="", label="", callback=on_next_input_text_change)
             add_spacing(count=3)
             with group("group6"):
                 add_drawing("next_plot_drawing_new", width=1200, height=200)
@@ -1011,7 +993,11 @@ with window("mainWin"):
                                  background_color=[0, 0, 0, 255])
                 add_button("play_selection_next", callback=play_selection_call, label="Play selection")
                 add_button("cut_selection_next", callback=cut_selection_call, label="Cut selection")
+                add_button("cut_selection_outside_next", callback=lambda: proofreader.cut_outside_selction(), label="Cut outside selection")
                 add_button("paste_selection_next", callback=paste_selection_call, label="Paste selection")
+                add_button("undo_next", callback=reset_next_call, label="Reset")
+                add_same_line(spacing=5)
+                add_button("duplicate_next", callback=duplicate_next_call, label="Duplicate Sel")
                 # add_button("next_play_to_selection", callback=next_play_to_selection_call, label="Play to selection")  
                 # add_button("next_play_from_selection", callback=next_play_from_selection_call, label="Play from selection")  
                 # add_button("next_send", callback=next_send_call, label="Send beginning cut to Current")  
@@ -1022,7 +1008,10 @@ with window("mainWin"):
                 add_spacing(count=5)
                 add_button("next_remove", callback=next_remove_call, label="Remove entry!")
                 # proofreader.next_plot_drawing_set_point(0)
-
+            add_checkbox("save_proofreader_on_exit", default_value=cfg_getboolean("general", "save_proofreader_on_exit"),
+                         label="Save on exit")
+            add_same_line(spacing=10)
+            add_button("save_current_settings_proofreader", callback=save_current_settings, label="Save config")
         # with tab("tab3", label="Increase Dataset"):
         #     add_spacing(count=5)           
 
@@ -1035,9 +1024,14 @@ with window("mainWin"):
             add_button("tools_open_project_merge", callback=tools_open_project_merge_call, label="Add project")
             add_spacing(count=3)
             add_table("tools_table_merge", ["Projects to merge"], callback=tools_table_merge_call, height=150,
-                      width=600)
+                      width=1000)
             add_spacing(count=3)
             add_button("tools_clear_merge_projects", callback=tools_clear_merge_projects_call, label="Clear table")
+            add_spacing(count=3)
+            add_button("tool_open_marge_target_dir", label="Output directory (default: ./merge)",
+                       callback=open_directory_dialogue_and_set_label("label_tool_open_marge_target_dir"))
+            add_same_line(spacing=3)
+            add_label_text("label_tool_open_marge_target_dir", label="")
             add_spacing(count=3)
             add_button("tools_merge_projects", callback=tools_merge_projects_call, label="Merge projects")
             add_spacing(count=3)

@@ -9,6 +9,7 @@ import shutil
 from google.cloud import storage
 from google.cloud import speech_v1p1beta1 as speech
 import config_helper
+import time
 
 def to_millis(timestamp):
     timestamp = str(timestamp)
@@ -20,38 +21,45 @@ def to_millis(timestamp):
     return miliseconds
 
 class Dataset_builder:
-    def __init__(self):    
-        self.project_name = None
+    def __init__(self):
+        self.project_dir = None
         self.speaker_text_path = None
         self.wav_file_path = None
         self.index_start = None
         self.cut_length = None
         self.split_method = None
         self.contains_punc = None
+        self.google_cloud_credentials_path = None
     
-    def set_values(self, project_name, speaker_text_path, wav_file_path, index_start, cut_length, split_method, contains_punc):    
-        self.project_name = project_name
+    def set_values(self, projects_dir, speaker_text_path, wav_file_path, index_start, cut_length, split_method, contains_punc, google_cloud_credentials_path, project_label = None):
+        if project_label:
+            project_name = "dataset-" + project_label + "-" + str(round(time.time_ns() / 1000))
+        else:
+            project_name = "dataset-" + str(round(time.time_ns() / 1000))
+        self.project_dir = os.path.join(projects_dir, project_name)
         self.speaker_text_path = speaker_text_path
         self.wav_file_path = wav_file_path
         self.index_start = index_start
         self.cut_length = float(cut_length)
         self.split_method = split_method
         self.contains_punc = contains_punc
+        self.google_cloud_credentials_path = google_cloud_credentials_path
 
     def build_dataset(self):
         print("running")
-        output_wav_path = "{}/wavs/".format(self.project_name)
+        output_wavs_path = os.path.join(self.project_dir, "wavs")
 
-        if not os.path.exists(self.project_name):
-            os.mkdir(self.project_name)
+        if not os.path.exists(self.project_dir):
+            os.makedirs(self.project_dir)
         
-        if not os.path.exists(output_wav_path):
-            os.mkdir(output_wav_path) 
+        if not os.path.exists(output_wavs_path):
+            os.mkdir(output_wavs_path)
 
         if self.split_method == 0: 
             #Google API mode
-            if not get_value("input_project_name") or not get_value("label_wav_file_path"):
+            if not get_value("label_wav_file_path"):
                 print("Error, please choose text and/or audio files.")
+                set_value("label_build_status", "Error, please choose text and/or audio files.")
                 return
            
             set_value("label_build_status", "Detecting silences. This may take several minutes...")
@@ -92,7 +100,7 @@ class Dataset_builder:
             # Keep splitting until all cuts are under max len
 
             for i, c in enumerate(silence_cuts):
-                print(f"Checking phrase {i}...")
+                print(f"Checking phrase {i}/{len(silence_cuts)}...")
                 c_splits = split_wav(c, 1000)
                 for s in c_splits:
                     cuts.append(s)
@@ -105,7 +113,7 @@ class Dataset_builder:
 
                 if i == (len(cuts) - 1):
                     #on final entry
-                    if (temp_cuts.duration_seconds * 1000)  > (self.cut_length * 1000):
+                    if (temp_cuts.duration_seconds * 1000) > (self.cut_length * 1000):
                         final_cuts.append(prev_cuts)
                         final_cuts.append(c)
                     else:
@@ -114,29 +122,28 @@ class Dataset_builder:
                     if ((temp_cuts.duration_seconds * 1000) + (cuts[i+1].duration_seconds * 1000)) > (self.cut_length * 1000):
                         # combine failed, too long, add what has already been concatenated
                         final_cuts.append(temp_cuts)
-                        temp_cuts = AudioSegment.empty()               
-            
-            if not os.path.exists("{}/wavs".format(self.project_name)):
-                os.mkdir("{}/wavs".format(self.project_name))
-                     
+                        temp_cuts = AudioSegment.empty()
+
             for i, w in enumerate(final_cuts):
-                w.export("{}/wavs/{}.wav".format(self.project_name, i + int(get_value("input_starting_index"))), format="wav")
+                output_wav_file = os.path.join(output_wavs_path, str(i + int(get_value("input_starting_index"))) + ".wav")
+                w.export(output_wav_file, format="wav")
             
             # Process each cut into google API and add result to csv
-            with open("{}/output.csv".format(self.project_name), 'w') as f:
+            output_csv_file = os.path.join(self.project_dir, "output.csv")
+            with open(output_csv_file, 'w') as f:
                 bucket_name = get_value("input_storage_bucket")
                 newline = ''
                 for i, c in enumerate(final_cuts):
                     x = i + int(get_value("input_starting_index"))
                     print(f"Transcribing entry {x}")
-                    self.upload_blob(bucket_name, "{}/wavs/{}.wav".format(self.project_name, x), "temp_audio.wav")
+                    self.upload_blob(bucket_name, os.path.join(output_wavs_path, str(x) + ".wav"), "temp_audio.wav")
                     gcs_uri = "gs://{}/temp_audio.wav".format(bucket_name)
 
-                    client = speech.SpeechClient()
+                    client = speech.SpeechClient.from_service_account_json(filename=self.google_cloud_credentials_path)
 
                     audio = speech.RecognitionAudio(uri=gcs_uri)
 
-                    info = mediainfo("{}/wavs/{}.wav".format(self.project_name, x))
+                    info = mediainfo(os.path.join(output_wavs_path, str(x) + ".wav"))
                     sample_rate = info['sample_rate']
                 
                     if get_value("input_use_videomodel") == 1:
@@ -144,7 +151,7 @@ class Dataset_builder:
                         config = speech.RecognitionConfig(
                             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                             sample_rate_hertz=int(sample_rate),
-                            language_code=config_helper.cfg_get("general", "language"),
+                            language_code=config_helper.cfg_get("general", "language_code"),
                             enable_automatic_punctuation=True,
                             enable_word_time_offsets=False, 
                             enable_speaker_diarization=False,
@@ -156,7 +163,7 @@ class Dataset_builder:
                         config = speech.RecognitionConfig(
                             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
                             sample_rate_hertz=int(sample_rate),
-                            language_code=config_helper.cfg_get("general", "language"),
+                            language_code=config_helper.cfg_get("general", "language_code"),
                             enable_automatic_punctuation=True,
                             enable_word_time_offsets=False, 
                             enable_speaker_diarization=False,
@@ -184,7 +191,7 @@ class Dataset_builder:
             
         else:
             # Aeneas mode
-            if not get_value("input_project_name") or not get_value("label_speaker_text_path") or not get_value("label_wav_file_path"):
+            if not get_value("label_speaker_text_path") or not get_value("label_wav_file_path"):
                 print("Error, please choose text and/or audio files.")
                 return
             
@@ -241,18 +248,18 @@ class Dataset_builder:
                                 f.write(newline + stripped) 
                                 newline = '\n'          
                 #os.system('python -m aeneas.tools.execute_task ' + audio_name  + ' aeneas_prepped/split_text "task_adjust_boundary_percent_value=50|task_adjust_boundary_algorithm=percent|task_language=en|is_text_type=plain|os_task_file_format=csv" ' + 'aeneas_out/' + audio_name_no_ext + '.csv')
-                os.system('python -m aeneas.tools.execute_task ' + audio_name  + ' aeneas_prepped/split_text "task_adjust_boundary_percent_value=50|task_adjust_boundary_algorithm=percent|task_language=en|is_text_type=plain|os_task_file_format=csv" ' + 'aeneas_out/' + self.project_name + '.csv')
+                os.system('python -m aeneas.tools.execute_task ' + audio_name  + ' aeneas_prepped/split_text "task_adjust_boundary_percent_value=50|task_adjust_boundary_algorithm=percent|task_language=en|is_text_type=plain|os_task_file_format=csv" ' + 'aeneas_out/' + os.path.basename(self.project_dir) + '.csv')
 
                 output_exists = False
-                if os.path.exists("{}/output.csv".format(self.project_name)):
+                if os.path.exists("{}/output.csv".format(os.path.basename(self.project_dir))):
                     #if file exists then prepare for append
                     output_exists = True
 
-                new_csv_file = open("{}/output.csv".format(self.project_name), 'a')
+                new_csv_file = open("{}/output.csv".format(os.path.basename(self.project_dir)), 'a')
                 if output_exists:
                     new_csv_file.write("\n") 
                 
-                with open('aeneas_out/' + self.project_name + '.csv', 'r') as csv_file:
+                with open('aeneas_out/' + os.path.basename(self.project_dir) + '.csv', 'r') as csv_file:
                     
                     index_count = int(self.index_start)
                     csv_reader = csv.reader(csv_file, delimiter=',')
@@ -320,7 +327,7 @@ class Dataset_builder:
                                 wav_cut = w[(beginning_cut*1000):(end_cut*1000)]
                                 new_wav_filename = "wavs/" + str(index_count) + ".wav"                        
                                 new_csv_file.write("{}{}|{}".format(newline, new_wav_filename, text_out))
-                                wav_cut.export("{}/{}".format(self.project_name, new_wav_filename), format="wav")
+                                wav_cut.export("{}/{}".format(os.path.basename(self.project_dir), new_wav_filename), format="wav")
                                 index_count += 1
                                 newline = '\n'
 
@@ -331,7 +338,7 @@ class Dataset_builder:
                             wav_cut = w[(beginning_cut*1000):(end_cut*1000)]
                             new_wav_filename =  "wavs/" + str(index_count) + ".wav"
                             new_csv_file.write("{}{}|{}".format(newline, new_wav_filename, text_out))
-                            wav_cut.export("{}/{}".format(self.project_name, new_wav_filename), format="wav")
+                            wav_cut.export("{}/{}".format(os.path.basename(self.project_dir), new_wav_filename), format="wav")
                             index_count += 1
                             newline = '\n'
 
@@ -343,25 +350,32 @@ class Dataset_builder:
                 print('\a') #system beep 
                 print("Done with Aeneas!")
 
-    def upload_blob(self, bucket_name, source_file_name, destination_blob_name):
-
-        #storage_client = storage.Client.from_service_account_json(json_credentials_path='C:\TTS-corpus-builder\My First Project-b660c6889e30.json')
-        storage_client = storage.Client()
+    def upload_blob(self, bucket_name, source_file_name, destination_blob_name, google_cloud_credentials_path=None):
+        if not google_cloud_credentials_path:
+            google_cloud_credentials_path = self.google_cloud_credentials_path
+        storage_client = storage.Client.from_service_account_json(json_credentials_path=google_cloud_credentials_path)
         bucket = storage_client.bucket(bucket_name)
         blob = bucket.blob(destination_blob_name)
         blob.upload_from_filename(source_file_name)
         #print("File {} uploaded to {}.".format(source_file_name, destination_blob_name))
 
-    def diarization(self, wavfile, bucket_name, project_name):
-        if not os.path.exists(project_name):
-            os.mkdir(project_name)
-        print("Uploading {} to google cloud storage bucket".format(wavfile))
-        set_value("label_wav_file_transcribe", "Uploading file to cloud storage bucket...")    
-        self.upload_blob(bucket_name, wavfile, "temp_audio.wav")
-        gcs_uri = "gs://{}/temp_audio.wav".format(bucket_name)
-        set_value("label_wav_file_transcribe", "Finished uploading.")    
+    def diarization(self, wavfile, bucket_name, project_dir, google_cloud_credentials_path, project_name=None):
+        if not os.path.exists(project_dir):
+            os.makedirs(project_dir)
+        if project_name:
+            dianame = "diarization-" + project_name + "-" + str(round(time.time_ns() / 1000))
+        else:
+            dianame = "diarization-" + os.path.basename(wavfile) + "-" + str(round(time.time_ns() / 1000))
+        output_dir = os.path.join(project_dir, dianame)
+        os.mkdir(output_dir)
 
-        client = speech.SpeechClient()
+        print("Uploading {} to google cloud storage bucket".format(wavfile))
+        set_value("label_diarization_run_info", "Uploading file to cloud storage bucket...")
+        self.upload_blob(bucket_name, wavfile, "temp_audio.wav", google_cloud_credentials_path)
+        gcs_uri = "gs://{}/temp_audio.wav".format(bucket_name)
+        set_value("label_diarization_run_info", "Finished uploading.")
+
+        client = speech.SpeechClient.from_service_account_json(filename=google_cloud_credentials_path)
         audio = speech.RecognitionAudio(uri=gcs_uri)
         info = mediainfo(wavfile)
         sample_rate = info['sample_rate']
@@ -370,7 +384,7 @@ class Dataset_builder:
         config = speech.RecognitionConfig(
             encoding=speech.RecognitionConfig.AudioEncoding.LINEAR16,
             sample_rate_hertz=int(sample_rate),
-            language_code=config_helper.cfg_get("general", "language"),
+            language_code=config_helper.cfg_get("general", "language_code"),
             enable_automatic_punctuation=True,
             enable_word_time_offsets=True, 
             enable_speaker_diarization=True,
@@ -379,7 +393,7 @@ class Dataset_builder:
 
         operation = client.long_running_recognize(config=config, audio=audio)
         print("Waiting for operation to complete, this may take several minutes...")
-        set_value("label_wav_file_transcribe", "Waiting for operation to complete, this may take several minutes...")    
+        set_value("label_diarization_run_info", "Waiting for operation to complete, this may take several minutes...")
         response = operation.result(timeout=28800)    
 
         result = response.results[-1]
@@ -416,14 +430,15 @@ class Dataset_builder:
         speaker_wavs[active_speaker-1] = speaker_wavs[active_speaker-1] + w_cut
 
         for i, wave in enumerate(speaker_wavs):
-            speaker_wavs[i].export("{}/speaker_{}.wav".format(project_name, i+1), format="wav")
+            speaker_output = os.path.join(output_dir, "speaker_{}.wav".format(i+1))
+            speaker_wavs[i].export(speaker_output, format="wav")
 
         for i, text in enumerate(transcript):
-            f = open("{}/speaker_{}.txt".format(project_name, i+1), 'w')
+            speaker_output = os.path.join(output_dir, "speaker_{}.txt".format(i+1))
+            f = open(speaker_output, 'w')
             f.write(transcript[i])
             f.close()
 
-        set_value("label_wav_file_transcribe", "Done!")   
+        set_value("label_diarization_run_info", "Done!")
         print("Done with diarization!")
-        print('\a') #system beep 
-
+        print('\a') #system beep

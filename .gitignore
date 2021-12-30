@@ -154,3 +154,4 @@ fabric.properties
 config.ini
 dataset
 dataset/*
+credentials.json
