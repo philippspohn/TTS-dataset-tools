@@ -8,22 +8,12 @@ from dearpygui.simple import *
 import sox
 from pydub import effects
 
+import tool_merge
+import youtube_tab
 from dataset_builder import *
 from proofreader import *
-from config_helper import cfg_get, cfg_set, cfg_getboolean, cfg_getint
-
-
-def save_current_settings():
-    cfg_set("general", "project_name", get_value("input_project_name"))
-    cfg_set("general", "cloud_storage_bucket", get_value("input_storage_bucket"))
-    cfg_set("general", "use_google_api", str(get_value("input_split")))
-    cfg_set("general", "use_enhanced_video_model", str(get_value("input_use_videomodel")))
-    cfg_set("general", "language_code", get_value("input_language_code"))
-    cfg_set("general", "google_cloud_credentials_file",  get_value("label_credentials_file_path"))
-    cfg_set("general", "diarization_project_directory",  get_value("diarization_project_directory"))
-    cfg_set("general", "datasetbuilder_project_directory",  get_value("datasetbuilder_project_directory"))
-    cfg_set("general", "save_proofreader_on_exit",  str(get_value("save_proofreader_on_exit")))
-
+from config_helper import *
+from gui_helper import *
 
 class RepeatedTimer(object):
     def __init__(self, interval, function, *args, **kwargs):
@@ -83,10 +73,23 @@ def run_dataset_builder_call(sender, data):
     # check to see if txt and wav file was selected
     set_value("label_build_status", "Running builder...")
 
-    builder.set_values(get_value("datasetbuilder_project_directory"), get_value("label_speaker_text_path")
-                       , get_value("label_wav_file_path"), get_value("input_starting_index"),
-                       get_value("input_cut_length"), get_value("input_split"), get_value("input_contains_punc"), get_value("label_credentials_file_path"),
-                       get_value("input_project_name"))
+    # Google API mode
+    if not get_value("label_wav_file_path"):
+        print("Error, please choose text and/or audio files.")
+        set_value("label_build_status", "Error, please choose text and/or audio files.")
+        return
+
+    project_label = get_value("input_project_name")
+    projects_dir = get_value("datasetbuilder_project_directory")
+    if project_label:
+        project_name = "dataset-" + project_label + "-" + str(round(time.time_ns() / 1000))
+    else:
+        project_name = "dataset-" + str(round(time.time_ns() / 1000))
+    dataset_dir = os.path.join(projects_dir, project_name)
+
+    builder.set_values(dataset_dir, get_value("label_speaker_text_path"), get_value("label_wav_file_path"),
+                       1, 11, get_value("input_split") or get_value("input_transcribe_dataset"),
+                       get_value("input_contains_punc"), get_value("label_credentials_file_path"), transcription=get_value("input_transcribe_dataset"))
     builder.build_dataset()
 
 
@@ -149,7 +152,8 @@ def add_csv_path_proofread(path):
             # wav_filename should include path to wav file
             wav_filename_with_path = row[0]
             text = row[1]
-            # Check if row is blank!
+            if wav_filename_with_path and not text:
+                text = " "
             if text:
                 add_row("table_proofread", [wav_filename_with_path, text])
                 num_items += 1
@@ -159,7 +163,6 @@ def add_csv_path_proofread(path):
     # get values from first 2 rows
     current_path = get_table_item("table_proofread", 0, 0)
     next_path = get_table_item("table_proofread", 1, 0)
-
     current_wav = AudioSegment.from_wav("{}/{}".format(os.path.dirname(path), current_path))
     next_wav = AudioSegment.from_wav("{}/{}".format(os.path.dirname(path), next_path))
 
@@ -302,6 +305,7 @@ def duplicate_current_call():
     name = str(current_milli_time())
     new_path = os.path.join(new_path, name + ".wav")
     add_row("table_proofread", [os.path.join(os.path.dirname(old_path), name) + ".wav", text])
+    # todo insert_row after
 
     proofreader.set_num_items(proofreader.get_num_items() + 1)
 
@@ -451,20 +455,6 @@ def tools_process_wavs_call(sender, data):
         print('\a')  # system beep
 
 
-def open_file_dialogue_and_set_label(label_name, save_to_config=False):
-    return lambda: open_file_dialog(lambda sender, data: set_label(label_name, os.path.join(data[0], data[1]), save_to_config))
-
-
-def open_directory_dialogue_and_set_label(label_name, save_to_config=False):
-    return lambda: select_directory_dialog(lambda sender, data: set_label(label_name, os.path.join(data[0], data[1]), save_to_config))
-
-
-def set_label(label_name, value, save_to_config):
-    set_value(label_name, value)
-    if save_to_config:
-        cfg_set("general", label_name, value)
-
-
 def tools_open_project_merge_call(sender, data):
     open_file_dialog(add_tools_project_merge_call)
 
@@ -485,43 +475,11 @@ def tools_merge_projects_call(sender, data):
         print("Table is empty")
         return
 
-
+    input_csvs = [row[0] for row in table]
     target_dir = get_value("label_tool_open_marge_target_dir")
     if not target_dir:
-        target_dir = "merged"
-
-    output_wavs_dir = os.path.join(target_dir, "wavs")
-    output_csv = os.path.join(target_dir, "output.csv")
-
-    if not os.path.exists(target_dir):
-        os.mkdir(target_dir)
-    if not os.path.exists(output_wavs_dir):
-        os.mkdir(output_wavs_dir)
-    else:
-        shutil.rmtree(output_wavs_dir)
-        os.mkdir(output_wavs_dir)
-
-    with open(output_csv, 'w') as f:
-        newline = ''
-        count = 0
-        for row in table:
-            input_csv_file = row[0]
-            input_csv_dir = os.path.dirname(input_csv_file)
-            with open(input_csv_file) as p:
-                lines = p.readlines()
-                for line in lines:
-                    wav_path, text = line.split('|')
-                    text = text.strip()
-                    f.write(newline + 'wavs/' + str(count).zfill(4) + '.wav' + '|' + text)
-                    newline = '\n'
-                    input_wav_file = os.path.join(input_csv_dir, wav_path)
-                    output_wav_file = os.path.join(output_wavs_dir, str(count).zfill(4) + '.wav')
-                    copyfile(input_wav_file, output_wav_file)
-                    count += 1
-        print("Done merging!")
-        set_value("tools_status", "Done merging projects. Output at " + target_dir)
-        print('\a')  # system beep
-
+        target_dir = "./merge"
+    tool_merge.merge_datasets(input_csvs, target_dir)
 
 def tools_table_merge_call(sender, data):
     pass
@@ -823,7 +781,7 @@ with window("mainWin"):
             add_spacing(count=5)
             add_text("Language-Code: ")
             add_same_line(spacing=10)
-            add_input_text("input_language_code", width=500, default_value=cfg_get("general", "language_code"),
+            add_input_text("input_language_code", width=500, default_value=cfg_get("transcription", "language_code"),
                            label="")
             add_same_line(spacing=10)
             add_button("input_list_lang_codes", label="[List]",
@@ -862,24 +820,37 @@ with window("mainWin"):
             add_spacing(count=2)
             add_text("TRANSCRIBE AND BUILD DATASET: ")
             add_spacing(count=5)
-            add_text("Enter starting index (default is 1): ")
+            add_text("Minimium segement length in ms (default: 1000): ")
             add_same_line(spacing=10)
-            add_input_text("input_starting_index", width=200, default_value="1", label="")
+            add_input_text("input_min_seg_length", width=200, default_value=cfg_get("transcription", "min_segment_length"), label="")
             add_spacing(count=5)
-            add_text("Enter max cut length in seconds (default is 11.0): ")
+            add_text("Maximum segement length in ms (default: 12000): ")
             add_same_line(spacing=10)
-            add_input_text("input_cut_length", width=200, default_value="11.0", label="")
+            add_input_text("input_max_seg_length", width=200, default_value=cfg_get("transcription", "max_segment_length"), label="")
+            add_spacing(count=5)
+            add_text("Padding start in ms (default: 10): ")
+            add_same_line(spacing=10)
+            add_input_text("input_padding_start", width=200, default_value=cfg_get("transcription", "padding_start"), label="")
+            add_spacing(count=5)
+            add_text("Padding end in ms (default: 10): ")
+            add_same_line(spacing=10)
+            add_input_text("input_padding_end", width=200, default_value=cfg_get("transcription", "padding_end"), label="")
+            add_spacing(count=5)
+            add_text("Transcribe")
+            add_same_line(spacing=10)
+            add_checkbox("input_transcribe_dataset", default_value=cfg_getboolean("general", "transcribe"),
+                         label="")
             add_spacing(count=5)
             add_text("Use Google API (recommended) or aeneas to build dataset?")
             add_same_line(spacing=10)
             add_text("\t")
             add_same_line(spacing=1)
             add_radio_button("input_split", items=["Google API (recommended)", "Aeneas"],
-                             default_value=cfg_getint("general", "use_google_api"))
+                             default_value=cfg_getint("transcription", "use_google_api"))
             add_spacing(count=3)
             add_text("Use Google API enhanced 'video' model? (slightly extra cost)")
             add_same_line(spacing=10)
-            add_checkbox("input_use_videomodel", default_value=cfg_getboolean("general", "use_enhanced_video_model"),
+            add_checkbox("input_use_videomodel", default_value=cfg_getboolean("transcription", "use_enhanced_video_model"),
                          label="")
             add_spacing(count=5)
             add_text("If using Aeneas, does the text have proper punctuation? ")
@@ -1071,5 +1042,7 @@ with window("mainWin"):
             add_spacing(count=5)
             add_slider_int("Font Scale", default_value=100, min_value=50, max_value=300, width=200,
                            callback=apply_font_scale_call)
+        with tab("tab6", label="YouTube"):
+            youtube_tab.add_elements()
 
 start_dearpygui(primary_window="mainWin")

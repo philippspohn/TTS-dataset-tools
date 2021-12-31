@@ -4,3 +4,4 @@ sox~=1.4.1
 pydub~=0.25.1
 dearpygui~=0.6.415
 dearpygui~=0.6.415
+yt-dlp~=2021.12.27
